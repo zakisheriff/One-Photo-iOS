@@ -59,17 +59,17 @@ struct NewProjectSheet: View {
                                 }
                                 
                                 // Gray
-                                ColorOption(color: .gray, isSelected: selectedColor == .gray) {
+                                ColorOption(color: .gray, isSelected: selectedColor == .gray, label: "Gray") {
                                     selectedColor = .gray
                                 }
                                 
                                 // Red
-                                ColorOption(color: .red, isSelected: selectedColor == .red) {
+                                ColorOption(color: .red, isSelected: selectedColor == .red, label: "Red") {
                                     selectedColor = .red
                                 }
                                 
                                 // Blue
-                                ColorOption(color: .blue, isSelected: selectedColor == .blue) {
+                                ColorOption(color: .blue, isSelected: selectedColor == .blue, label: "Blue") {
                                     selectedColor = .blue
                                 }
                             }

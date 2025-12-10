@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct CanvasView: View {
     @ObservedObject var viewModel: EditorViewModel
@@ -21,12 +22,9 @@ struct CanvasView: View {
                     LayerView(
                         layer: $layer,
                         isSelected: viewModel.selectedLayerId == layer.id,
-                        dragOffset: (viewModel.selectedLayerId == layer.id) ? CGSize(
-                            width: snapedOffsetOverride.width ?? dragOffset.width,
-                            height: snapedOffsetOverride.height ?? dragOffset.height
-                        ) : .zero,
-                        rotation: (viewModel.selectedLayerId == layer.id) ? rotationAngle : .zero,
-                        scale: (viewModel.selectedLayerId == layer.id) ? scaleAmount : 1.0
+                        dragOffset: .zero,
+                        rotation: .zero,
+                        scale: 1.0
                     )
                         .onTapGesture(count: 2) {
                             if case .text(let text) = layer.type {
@@ -49,6 +47,16 @@ struct CanvasView: View {
                                     HapticManager.shared.selection()
                                 }
                         )
+                        .onLongPressGesture(minimumDuration: 0.5) {
+                            if viewModel.selectedLayerId == layer.id {
+                                viewModel.showingLayerOptions = true
+                                HapticManager.shared.impact(style: .heavy)
+                            } else {
+                                viewModel.selectedLayerId = layer.id
+                                viewModel.showingLayerOptions = true
+                                HapticManager.shared.impact(style: .heavy)
+                            }
+                        }
                 }
             }
         }
@@ -78,176 +86,164 @@ struct CanvasView: View {
         // Global Gestures for Selected Layer
         .gesture(
             SimultaneousGesture(
-                SimultaneousGesture(
-                    DragGesture()
-                        .updating($dragOffset) { value, state, _ in
-                            state = value.translation
-                        }
-                        .onChanged { value in
-                            guard let id = viewModel.selectedLayerId,
-                                  let index = viewModel.layers.firstIndex(where: { $0.id == id }) else { return }
-                             
-                            // Calculate predicted position
-                            // Calculate predicted position
-                            // NOTE: 'dragOffset' is the gesture state. value.translation is the total drag.
-                            // We want the FUTURE position: currentLayer.position (static start) + drag.
-                            let currentLayer = viewModel.layers[index]
-                            let predictedX = currentLayer.position.x + value.translation.width
-                            let predictedY = currentLayer.position.y + value.translation.height
-                            
-                            // Reset guidelines
-                            viewModel.activeGuidelines = []
-                            var snappedX: CGFloat? = nil
-                            var snappedY: CGFloat? = nil
-                            let snapThreshold: CGFloat = 10.0 // Increased slightly to make it easier to find, but logic below ensures we can escape
-                            
-                            // 1. Center Snapping (Canvas)
-                            let centerX = viewModel.config.width / 2
-                            let centerY = viewModel.config.height / 2
-                            
-                            if abs(predictedX - centerX) < snapThreshold {
-                                snappedX = centerX
-                                viewModel.activeGuidelines.append(.init(type: .vertical, position: centerX))
-                            }
-                            if abs(predictedY - centerY) < snapThreshold {
-                                snappedY = centerY
-                                viewModel.activeGuidelines.append(.init(type: .horizontal, position: centerY))
-                            }
-                            
-                            // 2. Layer Snapping (Other Layers)
-                            for otherLayer in viewModel.layers where otherLayer.id != id && otherLayer.isVisible {
-                                if abs(predictedX - otherLayer.position.x) < snapThreshold {
-                                    snappedX = otherLayer.position.x
-                                    viewModel.activeGuidelines.append(.init(type: .vertical, position: otherLayer.position.x))
-                                }
-                                if abs(predictedY - otherLayer.position.y) < snapThreshold {
-                                    snappedY = otherLayer.position.y
-                                    viewModel.activeGuidelines.append(.init(type: .horizontal, position: otherLayer.position.y))
-                                }
-                            }
-                            
-                            // Sticky Logic
-                            // If snapped, we override the drag offset with the exact distance needed to hit the snap point.
-                            // If not snapped, we set the snap overrides to nil, letting the view use the raw gesture dragOffset.
-                            
-                            // X Axis
-                            if let sx = snappedX {
-                                snapedOffsetOverride.width = sx - currentLayer.position.x
-                            } else {
-                                snapedOffsetOverride.width = nil // Fallback to dragOffset.width
-                            }
-                            
-                            // Y Axis
-                            if let sy = snappedY {
-                                snapedOffsetOverride.height = sy - currentLayer.position.y
-                            } else {
-                                snapedOffsetOverride.height = nil // Fallback to dragOffset.height
-                            }
-                            
-                            // Haptic Feedback for Snap
-                            // Using State to detect CHANGES in snap status
-                            let newSnapState = SnapState(x: snappedX != nil, y: snappedY != nil)
-                            
-                            if newSnapState != currentSnapState {
-                                if newSnapState.x && newSnapState.y {
-                                    // Perfect Center - Strong Haptic
-                                    HapticManager.shared.notification(type: .success)
-                                } else if newSnapState.x || newSnapState.y {
-                                    // One Axis - Medium Haptic
-                                    HapticManager.shared.impact(style: .medium)
-                                }
-                                currentSnapState = newSnapState
-                            }
-                        }
-                        .onEnded { value in
-                            guard let id = viewModel.selectedLayerId,
-                                  let index = viewModel.layers.firstIndex(where: { $0.id == id }) else { return }
-                            
-                            // Commit position
-                            // Use the override if present (that's where it visually is), otherwise natural end
-                            let dx = snapedOffsetOverride.width ?? value.translation.width
-                            let dy = snapedOffsetOverride.height ?? value.translation.height
-                            
-                            viewModel.layers[index].position.x += dx
-                            viewModel.layers[index].position.y += dy
-                            
-                            // Reset
-                            viewModel.activeGuidelines = []
-                            snapedOffsetOverride = (nil, nil)
-                            currentSnapState = SnapState()
-                            HapticManager.shared.impact(style: .light)
-                        },
-                    MagnificationGesture()
-                        .updating($scaleAmount) { value, state, _ in
-                            state = value
-                        }
-                        .onEnded { value in
-                            guard let id = viewModel.selectedLayerId,
-                                  let index = viewModel.layers.firstIndex(where: { $0.id == id }) else { return }
-                            let newScale = viewModel.layers[index].scale * value
-                            viewModel.layers[index].scale = max(0.2, min(5.0, newScale))
-                            HapticManager.shared.impact(style: .light)
-                        }
-                ),
-                RotationGesture()
-                    .updating($rotationAngle) { value, state, _ in
-                        state = value
-                    }
+                DragGesture()
                     .onChanged { value in
                         guard let id = viewModel.selectedLayerId,
                               let index = viewModel.layers.firstIndex(where: { $0.id == id }) else { return }
                         
-                        let currentRotation = viewModel.layers[index].rotation.degrees + value.degrees
-                        let snapAngles: [Double] = [0, 90, 180, 270, 360, -90, -180, -270, -360]
-                        let threshold: Double = 5.0
-                        
-                        let isNearSnap = snapAngles.contains { angle in
-                            abs(currentRotation - angle) < threshold
+                        // 1. Initialize Start if needed
+                        if lastDragOffset == .zero {
+                            lastDragOffset = value.translation
+                            return
                         }
                         
-                        // Haptic Logic
-                        if isNearSnap {
-                            if !currentSnapState.x { // Reuse state bit for rotation "isSnapped"
-                                HapticManager.shared.impact(style: .heavy)
-                                currentSnapState.x = true
+                        // 2. Calculate Delta
+                        let deltaX = value.translation.width - lastDragOffset.width
+                        let deltaY = value.translation.height - lastDragOffset.height
+                        
+                        // 3. Jump Detection (Hybrid: Flag + Heuristic + Safety)
+                        // Heuristic: If centroid moves > 50pts in one frame, it's a jump.
+                        // Safety: If delta is infinite or NaN, reject.
+                        if !deltaX.isFinite || !deltaY.isFinite { return }
+                        
+                        // Flag: If a simultaneous gesture just ended (finger lift).
+                        let distance = hypot(deltaX, deltaY)
+                        if ignoreNextDragDelta || distance > 50 {
+                            lastDragOffset = value.translation
+                            ignoreNextDragDelta = false
+                            return
+                        }
+                        
+                        // 4. Apply Delta to Position
+                        var currentLayer = viewModel.layers[index]
+                        var newX = currentLayer.position.x + deltaX
+                        var newY = currentLayer.position.y + deltaY
+                        
+                        // 5. Bounds Clamping (Strict but Safe)
+                        // Prevent disappearing by checking for NaN
+                        if !newX.isFinite { newX = currentLayer.position.x }
+                        if !newY.isFinite { newY = currentLayer.position.y }
+                        
+                        // Strict clamping to canvas with slight overscan allowed (so you can drag just mostly off, but not lost)
+                        // Actually user wants strict containment usually, but "disappearing" means lost.
+                        // Let's ensure it's within -size/2 to size*1.5 to be safe from "flying away" but allowing edge placement
+                        let safeX = max(-viewModel.config.width, min(viewModel.config.width * 2, newX))
+                        let safeY = max(-viewModel.config.height, min(viewModel.config.height * 2, newY))
+                        
+                        // 6. Magnetic Alignment & Snapping
+                        let centerX = viewModel.config.width / 2
+                        let centerY = viewModel.config.height / 2
+                        let snapThreshold: CGFloat = 10.0
+                        
+                        var snappedX: CGFloat? = nil
+                        var snappedY: CGFloat? = nil
+                        var activeGuides: [EditorViewModel.Guideline] = []
+                        
+                        // Center Snap
+                        if abs(safeX - centerX) < snapThreshold {
+                            snappedX = centerX
+                            activeGuides.append(.init(type: .vertical, position: centerX))
+                        }
+                        if abs(safeY - centerY) < snapThreshold {
+                            snappedY = centerY
+                            activeGuides.append(.init(type: .horizontal, position: centerY))
+                        }
+                        
+                        // Apply Snap or Clamped Position
+                        viewModel.activeGuidelines = activeGuides
+                        viewModel.layers[index].position.x = snappedX ?? safeX
+                        viewModel.layers[index].position.y = snappedY ?? safeY
+                        
+                        // 7. Haptics for Snap
+                        let newSnapState = SnapState(x: snappedX != nil, y: snappedY != nil)
+                        if newSnapState != currentSnapState {
+                            if newSnapState.x || newSnapState.y {
+                                HapticManager.shared.impact(style: .medium)
                             }
-                        } else {
-                            currentSnapState.x = false
+                            currentSnapState = newSnapState
                         }
+                        
+                        // 8. Update Baseline
+                        lastDragOffset = value.translation
                     }
-                    .onEnded { value in
-                        guard let id = viewModel.selectedLayerId,
-                              let index = viewModel.layers.firstIndex(where: { $0.id == id }) else { return }
-                        
-                        // Apply magnetic snap on release
-                        var finalRotation = viewModel.layers[index].rotation + value
-                        let degrees = finalRotation.degrees
-                        let snapAngles: [Double] = [0, 90, 180, 270, 360, -90, -180, -270, -360]
-                        let threshold: Double = 5.0
-                        
-                        for angle in snapAngles {
-                            if abs(degrees - angle) < threshold {
-                                finalRotation = Angle(degrees: angle)
-                                HapticManager.shared.notification(type: .success)
-                                break
+                    .onEnded { _ in
+                        lastDragOffset = .zero
+                        viewModel.activeGuidelines = []
+                        currentSnapState = SnapState()
+                        viewModel.registerUndo()
+                        HapticManager.shared.impact(style: .light)
+                    },
+                SimultaneousGesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            guard let id = viewModel.selectedLayerId,
+                                  let index = viewModel.layers.firstIndex(where: { $0.id == id }) else { return }
+                            
+                            // Safety: Division by zero protection
+                            let safeLast = (lastScaleAmount == 0) ? 1.0 : lastScaleAmount
+                            let delta = value / safeLast
+                            
+                            // Safety: Finite checks
+                            if !delta.isFinite || !value.isFinite { return }
+                            
+                            lastScaleAmount = value
+                            
+                            let newScale = viewModel.layers[index].scale * delta
+                            // Prevent zero/negative scale
+                            viewModel.layers[index].scale = max(0.1, min(10.0, newScale))
+                        }
+                        .onEnded { _ in
+                            lastScaleAmount = 1.0
+                            ignoreNextDragDelta = true // Signal drag to re-anchor
+                            viewModel.registerUndo()
+                            HapticManager.shared.impact(style: .light)
+                        },
+                    RotationGesture()
+                        .onChanged { value in
+                            guard let id = viewModel.selectedLayerId,
+                                  let index = viewModel.layers.firstIndex(where: { $0.id == id }) else { return }
+                            
+                            let delta = value - lastRotationAngle
+                            lastRotationAngle = value
+                            
+                            viewModel.layers[index].rotation += delta
+                            
+                            // Haptic Snap
+                            let currentDeg = viewModel.layers[index].rotation.degrees
+                            let snapAngles: [Double] = [0, 90, 180, 270, 360, -90, -180, -270, -360]
+                            let isNearSnap = snapAngles.contains { abs(currentDeg - $0) < 5.0 }
+                            
+                            if isNearSnap {
+                                if !currentSnapState.x {
+                                    HapticManager.shared.impact(style: .heavy)
+                                    currentSnapState.x = true
+                                }
+                            } else {
+                                currentSnapState.x = false
                             }
                         }
-                        
-                        viewModel.layers[index].rotation = finalRotation
-                        currentSnapState.x = false
-                    }
+                        .onEnded { _ in
+                            lastRotationAngle = .zero
+                            ignoreNextDragDelta = true // Signal drag to re-anchor
+                            viewModel.registerUndo()
+                            HapticManager.shared.impact(style: .light)
+                        }
+                )
             )
         )
     }
     
     // Gesture States (Global)
-    @GestureState private var dragOffset: CGSize = .zero
-    @GestureState private var rotationAngle: Angle = .zero
-    @GestureState private var scaleAmount: CGFloat = 1.0
-    
-    // Active Snapped State
-    // simplified tuple: (width?, height?)
+    @State private var lastDragOffset: CGSize = .zero
     @State private var snapedOffsetOverride: (width: CGFloat?, height: CGFloat?) = (nil, nil)
+    @State private var ignoreNextDragDelta: Bool = false
+    @State private var lastScaleAmount: CGFloat = 1.0
+    @State private var lastRotationAngle: Angle = .zero
+    
+    // Unused gesture states (removed)
+    // @GestureState private var dragOffset...
+    
+
     
     struct SnapState: Equatable {
         var x: Bool = false
@@ -271,7 +267,7 @@ struct CheckerboardView: View {
                                 if (row + column).isMultiple(of: 2) {
                                     Color.white
                                 } else {
-                                    Color(uiColor: .systemGray5)
+                                    Color.gray.opacity(0.2)
                                 }
                             }
                             .frame(width: size, height: size)

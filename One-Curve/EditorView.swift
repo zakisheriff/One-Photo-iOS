@@ -58,6 +58,22 @@ struct EditorView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack {
                         Button(action: {
+                            viewModel.undo()
+                        }) {
+                            Image(systemName: "arrow.uturn.backward")
+                                .foregroundStyle(viewModel.canUndo ? .white : .gray)
+                        }
+                        .disabled(!viewModel.canUndo)
+                        
+                        Button(action: {
+                            viewModel.redo()
+                        }) {
+                            Image(systemName: "arrow.uturn.forward")
+                                .foregroundStyle(viewModel.canRedo ? .white : .gray)
+                        }
+                        .disabled(!viewModel.canRedo)
+                        
+                        Button(action: {
                             HapticManager.shared.impact(style: .medium)
                             viewModel.showingLayerManager.toggle()
                         }) {
@@ -85,8 +101,7 @@ struct EditorView: View {
                     }) {
                         VStack {
                             Image(systemName: "photo")
-                                .font(.system(size: 20))
-                            Text("Add Photo").font(.caption2)
+                                .font(.system(size: 15))
                         }
                     }
                     
@@ -98,8 +113,7 @@ struct EditorView: View {
                     }) {
                         VStack {
                             Image(systemName: "textformat")
-                                .font(.system(size: 20))
-                            Text("Add Text").font(.caption2)
+                                .font(.system(size: 15))
                         }
                     }
                     
@@ -115,8 +129,7 @@ struct EditorView: View {
                     }) {
                         VStack {
                             Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 20))
-                            Text("Curve").font(.caption2)
+                                .font(.system(size: 15))
                         }
                     }
                     
@@ -131,8 +144,7 @@ struct EditorView: View {
                     }) {
                         VStack {
                             Image(systemName: "arrow.counterclockwise")
-                                .font(.system(size: 20))
-                            Text("Reset").font(.caption2)
+                                .font(.system(size: 15))
                         }
                     }
                     
@@ -174,6 +186,11 @@ struct EditorView: View {
                 ShareSheet(items: currentExportItems)
             }
             .overlay {
+                if viewModel.showingLayerOptions {
+                    LayerOptionsView(viewModel: viewModel)
+                        .transition(.opacity)
+                }
+                
                 if viewModel.showingTextEditor {
                     ZStack {
                         Color.black.opacity(0.4).ignoresSafeArea()
@@ -458,7 +475,9 @@ struct CurveToolView: View {
                             .font(.caption)
                             .foregroundStyle(.gray)
                         Slider(value: $viewModel.layers[index].cornerRadius, in: 0...100) { editing in
-                            if !editing {
+                            if editing {
+                                viewModel.registerUndo()
+                            } else {
                                 HapticManager.shared.impact(style: .light)
                             }
                         }
@@ -609,10 +628,12 @@ struct LayerManagerView: View {
                         }
                     }
                     .onMove { indices, newOffset in
+                        viewModel.registerUndo()
                         viewModel.layers.move(fromOffsets: indices, toOffset: newOffset)
                         HapticManager.shared.impact(style: .medium)
                     }
                     .onDelete { indices in
+                        viewModel.registerUndo()
                         viewModel.layers.remove(atOffsets: indices)
                         HapticManager.shared.notification(type: .warning)
                     }

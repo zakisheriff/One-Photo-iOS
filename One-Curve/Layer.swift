@@ -38,4 +38,14 @@ struct Layer: Identifiable, Equatable {
     var isBold: Bool = false
     var isItalic: Bool = false
     var isUnderline: Bool = false
+    
+    func calculateFrame(config: CanvasConfig) -> CGSize {
+        switch self.type {
+        case .image(let img):
+            let ratio = img.size.height / img.size.width
+            return CGSize(width: 250, height: 250 * ratio)
+        case .text:
+            return CGSize(width: 300, height: 150)
+        }
+    }
 }
