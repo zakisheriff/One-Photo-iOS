@@ -24,7 +24,8 @@ struct CanvasView: View {
                         isSelected: viewModel.selectedLayerId == layer.id,
                         dragOffset: .zero,
                         rotation: .zero,
-                        scale: 1.0
+                        scale: 1.0,
+                        isRotating: lastRotationAngle != .zero
                     )
                         .onTapGesture(count: 2) {
                             if case .text(let text) = layer.type {
@@ -200,11 +201,17 @@ struct CanvasView: View {
                         lastDragOffset = value.translation
                     }
                     .onEnded { _ in
+                        // Sanitize
+                        if let id = viewModel.selectedLayerId,
+                           let index = viewModel.layers.firstIndex(where: { $0.id == id }) {
+                            viewModel.sanitizeLayer(index: index)
+                        }
+                        
                         lastDragOffset = .zero
                         viewModel.activeGuidelines = []
                         currentSnapState = SnapState()
                         viewModel.registerUndo()
-                        HapticManager.shared.impact(style: .light)
+                        // HapticManager.shared.impact(style: .light) // Removed "drop" haptic as requested
                     },
                 SimultaneousGesture(
                     MagnificationGesture()
@@ -232,6 +239,12 @@ struct CanvasView: View {
                             viewModel.layers[index].scale = max(0.1, min(10.0, newScale))
                         }
                         .onEnded { _ in
+                            // Sanitize
+                            if let id = viewModel.selectedLayerId,
+                               let index = viewModel.layers.firstIndex(where: { $0.id == id }) {
+                                viewModel.sanitizeLayer(index: index)
+                            }
+                            
                             lastScaleAmount = 1.0
                             ignoreNextDragDelta = true // Signal drag to re-anchor
                             viewModel.registerUndo()
@@ -269,6 +282,22 @@ struct CanvasView: View {
                             }
                         }
                         .onEnded { _ in
+                            if let id = viewModel.selectedLayerId,
+                               let index = viewModel.layers.firstIndex(where: { $0.id == id }) {
+                                
+                                // Permanently snap angle if close (fixes "slight bend" after release)
+                                let currentDeg = viewModel.layers[index].rotation.degrees
+                                let snapAngles: [Double] = [0, 90, 180, 270, 360, -90, -180, -270, -360]
+                                for angle in snapAngles {
+                                    if abs(currentDeg - angle) < 5.0 {
+                                        viewModel.layers[index].rotation = Angle(degrees: angle)
+                                        break
+                                    }
+                                }
+                                
+                                viewModel.sanitizeLayer(index: index)
+                            }
+                            
                             lastRotationAngle = .zero
                             ignoreNextDragDelta = true // Signal drag to re-anchor
                             viewModel.registerUndo()
@@ -333,6 +362,7 @@ struct LayerView: View {
     var dragOffset: CGSize = .zero
     var rotation: Angle = .zero
     var scale: CGFloat = 1.0
+    var isRotating: Bool = false
     
     var body: some View {
         Group {
@@ -401,8 +431,8 @@ struct LayerView: View {
         let finalAngle = layer.rotation + (isSelected ? rotation : .zero)
         
         // Visual Snap Effect
-        // Only snap if we are actively rotating (rotation gesture is active)
-        if isSelected && abs(rotation.degrees) > 0.001 {
+        // Only snap if we are actively rotating (gesture is active)
+        if isSelected && isRotating {
             let degrees = finalAngle.degrees
             let snapAngles: [Double] = [0, 90, 180, 270, 360, -90, -180, -270, -360]
             let threshold: Double = 5.0

@@ -174,6 +174,20 @@ class EditorViewModel: ObservableObject {
     func updateSelectedLayer(transform: (inout Layer) -> Void) {
         guard let id = selectedLayerId, let index = layers.firstIndex(where: { $0.id == id }) else { return }
         transform(&layers[index])
+        sanitizeLayer(index: index)
+    }
+    
+    func sanitizeLayer(index: Int) {
+        // Position Safety
+        if !layers[index].position.x.isFinite { layers[index].position.x = config.width / 2 }
+        if !layers[index].position.y.isFinite { layers[index].position.y = config.height / 2 }
+        
+        // Scale Safety
+        if !layers[index].scale.isFinite { layers[index].scale = 1.0 }
+        layers[index].scale = max(0.1, min(10.0, layers[index].scale))
+        
+        // Rotation Safety
+        if !layers[index].rotation.degrees.isFinite { layers[index].rotation = .zero }
     }
     
     func bindingForSelectedLayer() -> Binding<Layer>? {
