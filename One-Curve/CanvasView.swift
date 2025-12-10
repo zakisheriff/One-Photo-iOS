@@ -1,5 +1,5 @@
 import SwiftUI
-import UIKit
+
 
 struct CanvasView: View {
     @ObservedObject var viewModel: EditorViewModel
@@ -48,14 +48,11 @@ struct CanvasView: View {
                                 }
                         )
                         .onLongPressGesture(minimumDuration: 0.5) {
-                            if viewModel.selectedLayerId == layer.id {
-                                viewModel.showingLayerOptions = true
-                                HapticManager.shared.impact(style: .heavy)
-                            } else {
+                            if viewModel.selectedLayerId != layer.id {
                                 viewModel.selectedLayerId = layer.id
-                                viewModel.showingLayerOptions = true
-                                HapticManager.shared.impact(style: .heavy)
                             }
+                            viewModel.showingLayerOptions = true
+                            HapticManager.shared.impact(style: .heavy)
                         }
                 }
             }
@@ -84,6 +81,39 @@ struct CanvasView: View {
                 .stroke(Color.white.opacity(0.15), lineWidth: 1) // Always visible border
         )
         // Global Gestures for Selected Layer
+        .confirmationDialog("Layer Options", isPresented: $viewModel.showingLayerOptions, titleVisibility: .visible) {
+            Button("Duplicate") {
+                viewModel.duplicateLayer()
+            }
+            
+            Button("Lock/Unlock") {
+                if let id = viewModel.selectedLayerId,
+                   let index = viewModel.layers.firstIndex(where: { $0.id == id }) {
+                    viewModel.layers[index].isLocked.toggle()
+                    HapticManager.shared.impact(style: .medium)
+                }
+            }
+            
+            Button("Opacity") {
+                viewModel.activeAdjustment = .opacity
+            }
+            
+            Button("Corner Radius") {
+                viewModel.activeAdjustment = .cornerRadius
+            }
+            
+            Button("Delete", role: .destructive) {
+                if let id = viewModel.selectedLayerId,
+                   let index = viewModel.layers.firstIndex(where: { $0.id == id }) {
+                    viewModel.layers.remove(at: index)
+                    viewModel.selectedLayerId = nil
+                    viewModel.registerUndo()
+                    HapticManager.shared.notification(type: .warning)
+                }
+            }
+            
+            Button("Cancel", role: .cancel) {}
+        }
         .gesture(
             SimultaneousGesture(
                 DragGesture()
@@ -107,8 +137,11 @@ struct CanvasView: View {
                         if !deltaX.isFinite || !deltaY.isFinite { return }
                         
                         // Flag: If a simultaneous gesture just ended (finger lift).
+                        // Flag: If a simultaneous gesture just ended (finger lift).
+                        // Heuristic: Only reset if jump is MASSIVE (likely teleportation or multi-touch glitch).
+                        // 50 was too low (blocked fast swipes). 300 is safer.
                         let distance = hypot(deltaX, deltaY)
-                        if ignoreNextDragDelta || distance > 50 {
+                        if ignoreNextDragDelta || distance > 300 {
                             lastDragOffset = value.translation
                             ignoreNextDragDelta = false
                             return
@@ -120,13 +153,13 @@ struct CanvasView: View {
                         var newY = currentLayer.position.y + deltaY
                         
                         // 5. Bounds Clamping (Strict but Safe)
-                        // Prevent disappearing by checking for NaN
-                        if !newX.isFinite { newX = currentLayer.position.x }
-                        if !newY.isFinite { newY = currentLayer.position.y }
+                        // Failsafe: If NaN detected, RECOVER immediately
+                        if !newX.isFinite || !newY.isFinite {
+                            newX = viewModel.config.width / 2
+                            newY = viewModel.config.height / 2
+                        }
                         
                         // Strict clamping to canvas with slight overscan allowed (so you can drag just mostly off, but not lost)
-                        // Actually user wants strict containment usually, but "disappearing" means lost.
-                        // Let's ensure it's within -size/2 to size*1.5 to be safe from "flying away" but allowing edge placement
                         let safeX = max(-viewModel.config.width, min(viewModel.config.width * 2, newX))
                         let safeY = max(-viewModel.config.height, min(viewModel.config.height * 2, newY))
                         
@@ -189,6 +222,12 @@ struct CanvasView: View {
                             lastScaleAmount = value
                             
                             let newScale = viewModel.layers[index].scale * delta
+                            // Speed Limit: Cap change to +/- 50% per frame
+                            if delta > 1.5 || delta < 0.5 {
+                                lastScaleAmount = value
+                                return
+                            }
+                            
                             // Prevent zero/negative scale
                             viewModel.layers[index].scale = max(0.1, min(10.0, newScale))
                         }
@@ -204,6 +243,13 @@ struct CanvasView: View {
                                   let index = viewModel.layers.firstIndex(where: { $0.id == id }) else { return }
                             
                             let delta = value - lastRotationAngle
+                            
+                            // Speed Limit: prevent "hard" rotation glitches (>45deg per frame is impossible)
+                            if abs(delta.degrees) > 45 {
+                                lastRotationAngle = value
+                                return
+                            }
+                            
                             lastRotationAngle = value
                             
                             viewModel.layers[index].rotation += delta
@@ -355,7 +401,8 @@ struct LayerView: View {
         let finalAngle = layer.rotation + (isSelected ? rotation : .zero)
         
         // Visual Snap Effect
-        if isSelected {
+        // Only snap if we are actively rotating (rotation gesture is active)
+        if isSelected && abs(rotation.degrees) > 0.001 {
             let degrees = finalAngle.degrees
             let snapAngles: [Double] = [0, 90, 180, 270, 360, -90, -180, -270, -360]
             let threshold: Double = 5.0

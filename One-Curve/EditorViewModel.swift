@@ -26,6 +26,13 @@ class EditorViewModel: ObservableObject {
 
     @Published var textEditingId: UUID?
     @Published var showingLayerOptions = false // New State for Long Press Menu
+    @Published var activeAdjustment: AdjustmentType? = nil
+    
+    enum AdjustmentType: Identifiable {
+        case opacity
+        case cornerRadius
+        var id: Int { hashValue }
+    }
     
     // Alignment State
     @Published var activeGuidelines: [Guideline] = []

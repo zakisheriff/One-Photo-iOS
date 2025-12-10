@@ -152,10 +152,11 @@ struct EditorView: View {
                 }
             }
             .overlay(alignment: .bottom) {
-                if viewModel.showingCurveTool {
-                    CurveToolView(viewModel: viewModel)
-                        .transition(.opacity)
+                if let adjustment = viewModel.activeAdjustment {
+                    AdjustmentSliderView(viewModel: viewModel, adjustment: adjustment)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                         .padding(.bottom, 60)
+                        .zIndex(200)
                 }
             }
             .sheet(isPresented: $viewModel.showingImagePicker) {
@@ -186,10 +187,7 @@ struct EditorView: View {
                 ShareSheet(items: currentExportItems)
             }
             .overlay {
-                if viewModel.showingLayerOptions {
-                    LayerOptionsView(viewModel: viewModel)
-                        .transition(.opacity)
-                }
+
                 
                 if viewModel.showingTextEditor {
                     ZStack {
@@ -380,10 +378,31 @@ struct CanvasGestures: ViewModifier {
                 MagnificationGesture()
                     .onChanged { value in
                         guard viewModel.selectedLayerId == nil else { return }
-                        let delta = value / lastScale
+                        
+                        // Safety: Check for NaN/Inf
+                        if !value.isFinite || value <= 0 { return }
+                        
+                        let safeLast = (lastScale == 0) ? 1.0 : lastScale
+                        let delta = value / safeLast
+                        
+                        // Speed Limit: Cap change to 5% per frame (smoother)
+                        // If delta is huge (>1.1 or <0.9), it's likely a jump/glitch.
+                        // We swallow the jump by updating baseline but NOT applying full delta.
+                        if delta > 1.1 || delta < 0.9 {
+                            lastScale = value
+                            return 
+                        }
+                        
                         lastScale = value
                         
                         let newScale = viewModel.viewportScale * delta
+                        
+                        // Safety Recovery
+                        if !newScale.isFinite {
+                            viewModel.viewportScale = 1.0
+                            return
+                        }
+                        
                         viewModel.viewportScale = min(max(newScale, 0.5), 5.0)
                     }
                     .onEnded { _ in
@@ -395,12 +414,26 @@ struct CanvasGestures: ViewModifier {
                     .onChanged { value in
                         guard viewModel.selectedLayerId == nil else { return }
                         
+                        // Safety: NaN Check
+                        if !value.translation.width.isFinite || !value.translation.height.isFinite { return }
+                        
                         // Calculate delta from last event
                         let deltaX = value.translation.width - lastOffset.width
                         let deltaY = value.translation.height - lastOffset.height
                         
+                        // Jump Detection for Viewport (300pt)
+                        if abs(deltaX) > 300 || abs(deltaY) > 300 {
+                            lastOffset = value.translation
+                            return
+                        }
+                        
                         viewModel.viewportOffset.width += deltaX
                         viewModel.viewportOffset.height += deltaY
+                        
+                        // Safety Recovery
+                        if !viewModel.viewportOffset.width.isFinite || !viewModel.viewportOffset.height.isFinite {
+                            viewModel.viewportOffset = .zero
+                        }
                         
                         lastOffset = value.translation
                     }
@@ -439,14 +472,15 @@ struct ToggleButton: View {
 
 // MARK: - Auxiliary Views
 
-struct CurveToolView: View {
+struct AdjustmentSliderView: View {
     @ObservedObject var viewModel: EditorViewModel
+    let adjustment: EditorViewModel.AdjustmentType
     
     var body: some View {
         VStack(spacing: 20) {
             // Header
             HStack {
-                Text("CORNER RADIUS")
+                Text(adjustment == .opacity ? "OPACITY" : "CORNER RADIUS")
                     .font(.system(size: 12, weight: .semibold, design: .default))
                     .tracking(1)
                     .foregroundStyle(.white.opacity(0.8))
@@ -455,7 +489,7 @@ struct CurveToolView: View {
                 
                 Button(action: {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                         viewModel.showingCurveTool = false
+                         viewModel.activeAdjustment = nil
                     }
                 }) {
                     Image(systemName: "xmark")
@@ -471,23 +505,29 @@ struct CurveToolView: View {
                 
                 VStack(spacing: 8) {
                     HStack {
-                        Image(systemName: "square")
+                        Image(systemName: adjustment == .opacity ? "circle.dotted" : "square")
                             .font(.caption)
                             .foregroundStyle(.gray)
-                        Slider(value: $viewModel.layers[index].cornerRadius, in: 0...100) { editing in
-                            if editing {
-                                viewModel.registerUndo()
+                        
+                        Group {
+                            if adjustment == .opacity {
+                                Slider(value: $viewModel.layers[index].opacity, in: 0...1) { editing in
+                                    if editing { viewModel.registerUndo() }
+                                }
                             } else {
-                                HapticManager.shared.impact(style: .light)
+                                Slider(value: $viewModel.layers[index].cornerRadius, in: 0...100) { editing in
+                                    if editing { viewModel.registerUndo() }
+                                }
                             }
                         }
                         .tint(.white)
-                        Image(systemName: "circle")
+                        
+                        Image(systemName: adjustment == .opacity ? "circle.fill" : "circle")
                             .font(.caption)
                             .foregroundStyle(.gray)
                     }
                     
-                    Text("\(Int(viewModel.layers[index].cornerRadius)) px")
+                    Text(valueString(for: viewModel.layers[index]))
                         .font(.system(size: 14, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white)
                 }
@@ -510,6 +550,15 @@ struct CurveToolView: View {
         )
         .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
         .padding(.horizontal, 20)
+    }
+    
+    func valueString(for layer: Layer) -> String {
+        switch adjustment {
+        case .opacity:
+            return "\(Int(layer.opacity * 100))%"
+        case .cornerRadius:
+            return "\(Int(layer.cornerRadius)) px"
+        }
     }
 }
 
