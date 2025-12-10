@@ -19,17 +19,25 @@ struct EditorView: View {
         NavigationStack {
             ZStack {
                 Color.black.ignoresSafeArea()
+                    .onTapGesture {
+                        viewModel.selectedLayerId = nil
+                        HapticManager.shared.selection()
+                    }
                 
                 // MARK: Canvas Layer
                 GeometryReader { geometry in
                     ZStack {
                         CanvasView(viewModel: viewModel)
                             .frame(width: viewModel.config.width, height: viewModel.config.height)
-                            .scaleEffect(fitScale(container: geometry.size, content: CGSize(width: viewModel.config.width, height: viewModel.config.height)))
+                            .scaleEffect(fitScale(container: geometry.size, content: CGSize(width: viewModel.config.width, height: viewModel.config.height)) * viewModel.viewportScale)
+                            .offset(viewModel.viewportOffset)
                             .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
+                    // Attach the Gesture Listener to the Container, simpler with a nice modifier
+                    .modifier(CanvasGestures(viewModel: viewModel))
                 }
                 .ignoresSafeArea(.keyboard) // Only ignore keyboard, respect bars
             }
@@ -109,6 +117,22 @@ struct EditorView: View {
                             Image(systemName: "slider.horizontal.3")
                                 .font(.system(size: 20))
                             Text("Curve").font(.caption2)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        HapticManager.shared.impact(style: .light)
+                        withAnimation {
+                            viewModel.viewportScale = 1.0
+                            viewModel.viewportOffset = .zero
+                        }
+                    }) {
+                        VStack {
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.system(size: 20))
+                            Text("Reset").font(.caption2)
                         }
                     }
                     
@@ -297,8 +321,6 @@ struct EditorView: View {
     private func exportImage(format: ExportFormat) -> URL? {
         guard let image = renderCanvas() else { return nil }
         
-        // Use a persistent file name or at least one that Photos app likes?
-        // Actually temp file is fine, ShareSheet handles saving.
         let fileName = "OneCurve_Export_\(Date().timeIntervalSince1970)"
         let tempDir = FileManager.default.temporaryDirectory
         
@@ -325,6 +347,50 @@ struct EditorView: View {
             HapticManager.shared.notification(type: .error)
         }
         return nil
+    }
+}
+
+struct CanvasGestures: ViewModifier {
+    @ObservedObject var viewModel: EditorViewModel
+    @State private var currentScale: CGFloat = 1.0
+    @State private var currentOffset: CGSize = .zero
+    @State private var lastScale: CGFloat = 1.0
+    @State private var lastOffset: CGSize = .zero
+    
+    func body(content: Content) -> some View {
+        content
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .onChanged { value in
+                        guard viewModel.selectedLayerId == nil else { return }
+                        let delta = value / lastScale
+                        lastScale = value
+                        
+                        let newScale = viewModel.viewportScale * delta
+                        viewModel.viewportScale = min(max(newScale, 0.5), 5.0)
+                    }
+                    .onEnded { _ in
+                        lastScale = 1.0
+                    }
+            )
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard viewModel.selectedLayerId == nil else { return }
+                        
+                        // Calculate delta from last event
+                        let deltaX = value.translation.width - lastOffset.width
+                        let deltaY = value.translation.height - lastOffset.height
+                        
+                        viewModel.viewportOffset.width += deltaX
+                        viewModel.viewportOffset.height += deltaY
+                        
+                        lastOffset = value.translation
+                    }
+                    .onEnded { _ in
+                        lastOffset = .zero
+                    }
+            )
     }
 }
 

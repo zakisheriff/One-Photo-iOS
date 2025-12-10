@@ -8,10 +8,10 @@ class EditorViewModel: ObservableObject {
     @Published var layers: [Layer] = []
     @Published var selectedLayerId: UUID?
     
-    // Canvas State
-    @Published var canvasScale: CGFloat = 1.0
-    @Published var canvasOffset: CGSize = .zero
-    @Published var canvasRotation: Angle = .zero
+    // Viewport State (Zoom/Pan)
+    @Published var viewportScale: CGFloat = 1.0
+    @Published var viewportOffset: CGSize = .zero
+    @Published var viewportRotation: Angle = .zero
     
     // Tools
     @Published var showingImagePicker = false
